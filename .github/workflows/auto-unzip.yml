@@ -1,0 +1,59 @@
+name: Auto Extract Root ZIP
+
+on:
+  push:
+    paths:
+      - '*.zip'
+      - '*.ZIP'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-unzip-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract ZIP archives into repository root
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import stat
+          import zipfile
+
+          archives = sorted(p for p in Path('.').iterdir()
+                            if p.is_file() and p.suffix.lower() == '.zip')
+          for archive in archives:
+              with zipfile.ZipFile(archive) as zf:
+                  for info in zf.infolist():
+                      name = info.filename.replace('\\', '/')
+                      path = PurePosixPath(name)
+                      mode = (info.external_attr >> 16) & 0xffff
+                      if (path.is_absolute() or '..' in path.parts or
+                          not path.parts or path.parts[0] == '.git' or
+                          stat.S_ISLNK(mode)):
+                          raise ValueError(f'Unsafe ZIP entry in {archive}: {info.filename}')
+                  zf.extractall('.')
+              archive.unlink()
+              print(f'Extracted and removed: {archive}')
+          PY
+
+      - name: Commit extracted files
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'Auto-extract uploaded ZIP archives'
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
