@@ -80,7 +80,7 @@ jobs:
           for target in targets:
             for attempt in range(4):
               try:
-                with urlopen(Request(target,headers={'Accept':'application/json'}),timeout=16) as res:
+                with urlopen(Request(target,headers={'Accept':'application/json','User-Agent':'FindlyHealthCheck/1.0 (+https://github.com/KKomaSub/redyellowblue)'}),timeout=16) as res:
                   payload=res.read(160000).decode('utf-8','replace')
                   try:
                     parsed=json.loads(payload)
