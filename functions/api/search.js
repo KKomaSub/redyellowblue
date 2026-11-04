@@ -112,7 +112,7 @@ function postUrl(raw){
   return u.protocol==='https:'&&/(^|\.)reddit\.com$/i.test(u.hostname)&&/\/comments\/[a-z0-9]+/i.test(u.pathname)?u.pathname+u.search:'';
 }
 async function fetchText(url,signal,accept){
-  const res=await fetch(url,{method:'GET',headers:{Accept:accept},redirect:'error',signal});
+  const res=await fetch(url,{method:'GET',headers:{Accept:accept,'User-Agent':'Mozilla/5.0 (compatible; FindlySearch/1.0)'},redirect:'follow',signal});
   if(!res.ok)throw new Error('HTTP '+res.status);
   if(Number(res.headers.get('content-length')||0)>2500000)throw new Error('Response too big');
   const body=await res.text();
@@ -219,32 +219,38 @@ export async function onRequestGet(context) {
   if (context.env?.REDDIT_CLIENT_ID && context.env?.REDDIT_CLIENT_SECRET && context.env?.REDDIT_USER_AGENT)
     jobs.push({name:'official',run:signal=>officialSearch(context,q,period,sort,signal)});
   jobs.push({name:'reddit-atom',run:signal=>atomSearch(q,period,sort,signal)});
-  for (const u of providers(q,period))
-    jobs.push({name:u.hostname,run:signal=>getJSON(u.toString(),null,signal)});
-  jobs.push({name:'bing-rss',run:signal=>rssSearch(q,period,signal)});
   jobs.push({name:'duck-search',run:signal=>htmlSearch(q,period,signal)});
-  const attempts=await Promise.allSettled(jobs.map(async job=>{
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),8500);
-    try {
-      const source=await job.run(controller.signal);
-      const seen=new Map();
-      for(const row of source) {
+  jobs.push({name:'bing-rss',run:signal=>rssSearch(q,period,signal)});
+
+  const controllers=jobs.map(()=>new AbortController());
+  const failures=[];
+  let validEmpty=false;
+  const promises=jobs.map(async(job,i)=>{
+    const timer=setTimeout(()=>controllers[i].abort(),9000);
+    try{
+      const source=await job.run(controllers[i].signal);
+      const deduplicated=new Map();
+      for(const row of source){
         const item=cleanPost(row);
-        if(item&&!seen.has(item.permalink))seen.set(item.permalink,item);
-        if(seen.size>=LIMIT)break;
+        if(item&&!deduplicated.has(item.permalink))deduplicated.set(item.permalink,item);
+        if(deduplicated.size>=LIMIT)break;
       }
-      return [...seen.values()];
-    } finally {clearTimeout(timer)}
-  }));
-  const successes=attempts.filter(x=>x.status==='fulfilled').map(x=>x.value);
-  if(!successes.length) {
-    console.warn('Upstream failures:',attempts.map((x,i)=>jobs[i].name+':'+String(x.reason?.message||'error').slice(0,70)).join(' | '));
-    return reply({error:'검색 제공처 연결 실패',code:'UPSTREAM_UNAVAILABLE'},502);
+      if(deduplicated.size===0){
+        if(job.name==='reddit-atom'||job.name==='official')validEmpty=true;
+        throw new Error('No results');
+      }
+      return [...deduplicated.values()];
+    }catch(e){
+      failures.push(job.name+':'+String(e?.message||e).slice(0,100));
+      throw e;
+    }finally{clearTimeout(timer)}
+  });
+  try{
+    const results=await Promise.any(promises);
+    controllers.forEach(c=>c.abort());
+    return reply({data:results});
+  }catch{
+    console.warn('All Findly search sources failed:',failures.join(' | '));
+    return validEmpty?reply({data:[]}):reply({error:'검색 제공처 연결 실패',code:'UPSTREAM_UNAVAILABLE'},502);
   }
-  const merged=new Map();
-  for(const items of successes){
-    for(const item of items)if(!merged.has(item.permalink)&&merged.size<LIMIT)merged.set(item.permalink,item);
-  }
-  return reply({data:[...merged.values()]});
 }
