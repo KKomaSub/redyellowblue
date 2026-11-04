@@ -65,3 +65,34 @@ jobs:
             except urllib.error.HTTPError as e:print("CHECK",label,"HTTP_ERROR",e.code,e.read(160).decode("utf-8","replace"))
             except Exception as e:print("CHECK",label,"ERROR",repr(e)[:200])
           PY
+
+      - name: Verify Cloudflare runtime upstream responses
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from urllib.request import Request,urlopen
+          from urllib.error import HTTPError
+          import json,time
+          targets=[
+            'https://wryb.pages.dev/api/diagnostics',
+            'https://wryb.pages.dev/api/search?q=chatgpt&period=all&sort=relevance'
+          ]
+          for target in targets:
+            for attempt in range(4):
+              try:
+                with urlopen(Request(target,headers={'Accept':'application/json'}),timeout=16) as res:
+                  payload=res.read(160000).decode('utf-8','replace')
+                  try:
+                    parsed=json.loads(payload)
+                    if 'data' in parsed:
+                      print('CLOUDFLARE',target,'HTTP',res.status,'RESULT_COUNT',len(parsed['data']))
+                      print('RESULT_SAMPLE',str(parsed['data'][:2])[:650])
+                    else:print('CLOUDFLARE',target,'HTTP',res.status,json.dumps(parsed,ensure_ascii=False)[:2000])
+                  except Exception:print('CLOUDFLARE',target,'HTTP',res.status,payload[:250])
+                break
+              except HTTPError as e:
+                print('CLOUDFLARE',target,'HTTP',e.code,e.read(600).decode('utf-8','replace'))
+                if e.code not in (404,502):break
+              except Exception as e:print('CLOUDFLARE',target,'ERR',str(e)[:120])
+              if attempt<3:time.sleep(10)
+          PY
