@@ -153,6 +153,30 @@ async function htmlSearch(q,period,signal){
   return rows;
 }
 
+async function atomSearch(q,period,sort,signal){
+  const u=new URL('https://www.reddit.com/search.rss');
+  u.searchParams.set('q',q);
+  u.searchParams.set('sort',sort==='recent'?'new':sort==='popular'?'top':'relevance');
+  u.searchParams.set('t',period);
+  u.searchParams.set('limit','75');
+  const xml=await fetchText(u.toString(),signal,'application/atom+xml, application/xml');
+  if(!/<feed[\s>]/i.test(xml))throw new Error('No Atom feed');
+  const rows=[];
+  for(const match of xml.matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/gi)){
+    const entry=match[1];
+    const href=/<link\b[^>]*\bhref\s*=\s*["']([^"']+)["']/i.exec(entry)?.[1]||'';
+    const permalink=postUrl(href);
+    const title=asText(xmlTag(entry,'title'));
+    if(!permalink||!title)continue;
+    const date=Date.parse(asText(xmlTag(entry,'published')||xmlTag(entry,'updated')));
+    rows.push({permalink,title,
+      selftext:asText(xmlTag(entry,'content')).slice(0,1200),
+      created_utc:Number.isFinite(date)?Math.floor(date/1000):0});
+    if(rows.length>=75)break;
+  }
+  return rows;
+}
+
 async function officialSearch(context, q, period, sort, signal) {
   const env = context.env || {};
   if (!env.REDDIT_CLIENT_ID || !env.REDDIT_CLIENT_SECRET || !env.REDDIT_USER_AGENT) {
@@ -194,6 +218,7 @@ export async function onRequestGet(context) {
   const jobs = [];
   if (context.env?.REDDIT_CLIENT_ID && context.env?.REDDIT_CLIENT_SECRET && context.env?.REDDIT_USER_AGENT)
     jobs.push({name:'official',run:signal=>officialSearch(context,q,period,sort,signal)});
+  jobs.push({name:'reddit-atom',run:signal=>atomSearch(q,period,sort,signal)});
   for (const u of providers(q,period))
     jobs.push({name:u.hostname,run:signal=>getJSON(u.toString(),null,signal)});
   jobs.push({name:'bing-rss',run:signal=>rssSearch(q,period,signal)});
