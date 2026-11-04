@@ -215,6 +215,15 @@ export async function onRequestGet(context) {
     return reply({ error: '잘못된 검색 요청입니다.' }, 400);
   }
 
+  // Cache successful, nonempty searches at the edge to reduce public RSS rate limits.
+  const cache=(typeof caches!=='undefined'&&caches.default)?caches.default:null;
+  if(cache){
+    try{
+      const saved=await cache.match(context.request);
+      if(saved)return saved;
+    }catch(e){console.warn('Search cache read failed:',String(e?.message||e))}
+  }
+
   const jobs = [];
   if (context.env?.REDDIT_CLIENT_ID && context.env?.REDDIT_CLIENT_SECRET && context.env?.REDDIT_USER_AGENT)
     jobs.push({name:'official',run:signal=>officialSearch(context,q,period,sort,signal)});
@@ -248,7 +257,13 @@ export async function onRequestGet(context) {
   try{
     const results=await Promise.any(promises);
     controllers.forEach(c=>c.abort());
-    return reply({data:results});
+    const response=reply({data:results});
+    response.headers.set('Cache-Control','public, max-age=600');
+    if(cache && typeof context.waitUntil==='function'){
+      context.waitUntil(cache.put(context.request,response.clone()).catch(e=>
+        console.warn('Search cache write failed:',String(e?.message||e))));
+    }
+    return response;
   }catch{
     console.warn('All Findly search sources failed:',failures.join(' | '));
     return validEmpty?reply({data:[]}):reply({error:'검색 제공처 연결 실패',code:'UPSTREAM_UNAVAILABLE'},502);
