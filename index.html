@@ -175,18 +175,14 @@
       const now=Math.floor(Date.now()/1000);
       return ({day:now-86400,week:now-7*86400,month:now-30*86400,year:now-365*86400})[period]||0;
     }
-    function urlsFor(q,period){
-      const after=sinceSeconds(period),size='70';
-      const a=new URL('https://api.pullpush.io/topic');a.searchParams.set('q',q);a.searchParams.set('size',size);if(after)a.searchParams.set('after',after);
-      const b=new URL('https://api.pullpush.io/reddit/search/submission/');b.searchParams.set('q',q);b.searchParams.set('size',size);if(after)b.searchParams.set('after',after);
-      const c=new URL('https://arctic-shift.photon-reddit.com/api/posts/search');c.searchParams.set('query',q);c.searchParams.set('limit','70');if(after)c.searchParams.set('after',after);c.searchParams.set('sort','desc');
-      return [a.href,b.href,c.href];
-    }
-    async function fetchJSON(url,reqId){
-      const c=new AbortController();state.controllers.push(c);
-      const timer=setTimeout(()=>c.abort(),9500);
+    async function fetchJSON(q,period,sort,reqId){
+      const controller=new AbortController();state.controllers.push(controller);
+      const timer=setTimeout(()=>controller.abort(),16000);
       try{
-        const response=await fetch(url,{method:'GET',headers:{'Accept':'application/json'},mode:'cors',credentials:'omit',signal:c.signal,cache:'no-store'});
+        const params=new URLSearchParams({q,period,sort});
+        const response=await fetch('/api/search?'+params.toString(),{
+          method:'GET',headers:{Accept:'application/json'},credentials:'same-origin',signal:controller.signal
+        });
         if(reqId!==state.requestId)throw new Error('outdated');
         if(!response.ok)throw new Error('HTTP '+response.status);
         const json=await response.json();
@@ -268,16 +264,12 @@
       const reqId=++state.requestId;
       state.query=q;state.raw=[];state.isLoading=true;queryInput.value=q;toggleClear();
       document.body.classList.add('has-results');skeleton();caption.textContent='검색 결과를 불러오고 있습니다...';$('searchButton').disabled=true;
-      const sourceUrls=urlsFor(q,state.period);
       let results=[],hadSuccess=false;
-      for(const url of sourceUrls){
-        try{
-          const data=await fetchJSON(url,reqId);
-          if(reqId!==state.requestId)return;
-          hadSuccess=true;
-          if(data.length){results=data;break}
-        }catch(e){if(reqId!==state.requestId)return}
-      }
+      try{
+        results=await fetchJSON(q,state.period,state.sort,reqId);
+        if(reqId!==state.requestId)return;
+        hadSuccess=true;
+      }catch(e){if(reqId!==state.requestId)return}
       if(reqId!==state.requestId)return;
       state.isLoading=false;$('searchButton').disabled=false;list.setAttribute('aria-busy','false');
       state.raw=results;
