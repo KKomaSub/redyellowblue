@@ -1,0 +1,41 @@
+name: Search endpoint diagnostics
+
+on:
+  push:
+    paths:
+      - '.github/workflows/search-smoke.yml'
+      - 'functions/api/search.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-providers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check public search providers and deployed endpoint
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError
+          targets = {
+            'production': 'https://wryb.pages.dev/api/search?q=chatgpt&period=all&sort=relevance',
+            'pullpush': 'https://api.pullpush.io/reddit/search/submission/?q=chatgpt&size=3',
+            'arctic_shift': 'https://arctic-shift.photon-reddit.com/api/posts/search?query=chatgpt&limit=3&sort=desc',
+            'bing_rss': 'https://www.bing.com/search?format=rss&q=site%3Areddit.com+chatgpt',
+            'google_news_rss': 'https://news.google.com/rss/search?q=site%3Areddit.com+chatgpt&hl=en-US&gl=US&ceid=US%3Aen',
+          }
+          for name,url in targets.items():
+            try:
+              req = Request(url, headers={'User-Agent':'Mozilla/5.0 (compatible; FindlySearchHealth/1.0)', 'Accept':'application/json, application/rss+xml, text/xml'})
+              with urlopen(req, timeout=12) as response:
+                sample=response.read(160).decode('utf-8','replace').replace('\n',' ')
+                print(name, response.status, response.headers.get('content-type'), sample)
+            except HTTPError as exc:
+              print(name,'HTTP',exc.code,exc.read(140).decode('utf-8','replace').replace('\n',' '))
+            except Exception as exc:
+              print(name,type(exc).__name__,str(exc)[:120])
+          PY
