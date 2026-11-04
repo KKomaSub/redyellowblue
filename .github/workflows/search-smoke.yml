@@ -39,3 +39,29 @@ jobs:
             except Exception as exc:
               print(name,type(exc).__name__,str(exc)[:120])
           PY
+
+      - name: Verify search result feed contents
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import urllib.request, urllib.parse, urllib.error
+          import xml.etree.ElementTree as ET
+          cases = {
+            "bing_exact": ("https://www.bing.com/search",{"q":"site:reddit.com/r/ chatgpt","format":"rss","count":"50"}),
+            "bing_broad": ("https://www.bing.com/search",{"q":"site:reddit.com chatgpt","format":"rss","count":"50"}),
+            "reddit_rss": ("https://www.reddit.com/search.rss",{"q":"chatgpt","sort":"relevance"}),
+            "arctic_scoped": ("https://arctic-shift.photon-reddit.com/api/posts/search",{"subreddit":"ChatGPT","query":"chatgpt","limit":"3"}),
+          }
+          for label,(origin, params) in cases.items():
+            try:
+              req=urllib.request.Request(origin+"?"+urllib.parse.urlencode(params),headers={"User-Agent":"Mozilla/5.0 (compatible; FindlyHealth/1.0)","Accept":"application/rss+xml, application/json"})
+              with urllib.request.urlopen(req,timeout=12) as r:
+                raw=r.read(400000);print("CHECK",label,"HTTP",r.status,"SIZE",len(raw),"CT",r.headers.get("content-type"))
+                if b"<rss" in raw[:300] or b"<?xml" in raw[:200]:
+                  root=ET.fromstring(raw);items=root.findall(".//item")
+                  print("ITEM_COUNT",len(items))
+                  for item in items[:6]: print("ITEM_LINK",item.findtext("link","")[:190])
+                else: print("RESPONSE",raw[:260].decode("utf-8","replace"))
+            except urllib.error.HTTPError as e:print("CHECK",label,"HTTP_ERROR",e.code,e.read(160).decode("utf-8","replace"))
+            except Exception as e:print("CHECK",label,"ERROR",repr(e)[:200])
+          PY
